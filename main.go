@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -47,15 +48,14 @@ func main() {
 
 		switch {
 		case msgText == "/start":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я помогу тебе с напоминаниями. Нажми кнопку или введи команду.")
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я помогу тебе с напоминаниями.")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
 		case msgText == "/help", strings.Contains(msgText, "помощь"):
-			help := "📚 Доступные команды:\n" +
-				"/remind <время> <текст> — создать напоминание (например: /remind 10s позвонить)\n" +
-				"Напомни мне <текст> через <время> — естественная команда (например: Напомни мне выйти через 5m)\n" +
-				"/menu — показать кнопки"
+			help := "📚 Команды:\n" +
+				"/remind <время> <текст> — пример: /remind 10s выйти\n" +
+				"Напомни мне через <время> <текст> — пример: Напомни через 2 минуты выпить чай"
 			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, help))
 
 		case msgText == "/menu":
@@ -66,7 +66,7 @@ func main() {
 		case strings.HasPrefix(msgText, "/remind"):
 			handleRemind(bot, upd, msgText)
 
-		case strings.HasPrefix(msgText, "напомни мне"):
+		case strings.Contains(msgText, "напомни") && strings.Contains(msgText, "через"):
 			parseNatural(bot, upd, msgText)
 
 		default:
@@ -78,52 +78,51 @@ func main() {
 func handleRemind(bot *tgbotapi.BotAPI, upd tgbotapi.Update, text string) {
 	parts := strings.SplitN(text, " ", 3)
 	if len(parts) < 3 {
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
-			"⚠️ Используй: /remind <время> <текст>, например /remind 10s Сделать перерыв"))
+		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ /remind <время> <текст>"))
 		return
 	}
-
 	d, err := time.ParseDuration(parts[1])
 	if err != nil {
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
-			"❌ Неверный формат времени. Примеры: 10s, 5m, 1h"))
+		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "❌ Время неверно. Пример: 10s, 2m, 1h"))
 		return
 	}
-
-	note := parts[2]
 	bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⏳ Ок, напомню через "+parts[1]))
-
-	go func(id int64, delay time.Duration, msg string) {
-		time.Sleep(delay)
-		bot.Send(tgbotapi.NewMessage(id, "⏰ Напоминание: "+msg))
-	}(upd.Message.Chat.ID, d, note)
-}
-
-func parseNatural(bot *tgbotapi.BotAPI, upd tgbotapi.Update, text string) {
-	if !strings.Contains(text, "через") {
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "❗ Укажи время через сколько напомнить, например: Напомни мне поесть через 30m"))
-		return
-	}
-
-	parts := strings.SplitN(text, "через", 2)
-	if len(parts) < 2 {
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ Не смог разобрать команду"))
-		return
-	}
-
-	message := strings.TrimSpace(parts[0][len("напомни мне"):])
-	duration := strings.TrimSpace(parts[1])
-
-	d, err := time.ParseDuration(duration)
-	if err != nil {
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Время указано неверно. Примеры: 10s, 5m, 1h"))
-		return
-	}
-
-	bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⏳ Ок, напомню через "+duration))
-
 	go func(id int64, delay time.Duration, msg string) {
 		time.Sleep(delay)
 		bot.Send(tgbotapi.NewMessage(id, "🔔 Напоминание: "+msg))
-	}(upd.Message.Chat.ID, d, message)
+	}(upd.Message.Chat.ID, d, parts[2])
+}
+
+func parseNatural(bot *tgbotapi.BotAPI, upd tgbotapi.Update, text string) {
+	// Пример: напомни мне через 2 минуты попить
+	r := regexp.MustCompile(`через (\d+)\s*(секунд[ы]?|сек|s|минут[ы]?|мин|m|час[аов]*|ч|h)\s*(.*)?`)
+	m := r.FindStringSubmatch(text)
+	if len(m) < 4 {
+		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ Не понял команду. Пример: Напомни через 10 секунд сделать что-то"))
+		return
+	}
+
+	value := m[1]
+	unit := strings.ToLower(m[2])
+	message := m[3]
+
+	// Преобразуем в duration
+	var duration time.Duration
+	switch {
+	case strings.HasPrefix(unit, "сек"):
+		duration, _ = time.ParseDuration(value + "s")
+	case strings.HasPrefix(unit, "мин"):
+		duration, _ = time.ParseDuration(value + "m")
+	case strings.HasPrefix(unit, "ч"):
+		duration, _ = time.ParseDuration(value + "h")
+	default:
+		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "❌ Неподдерживаемая единица времени"))
+		return
+	}
+
+	bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "🕐 Хорошо, напомню через "+value+" "+unit))
+	go func(id int64, d time.Duration, msg string) {
+		time.Sleep(d)
+		bot.Send(tgbotapi.NewMessage(id, "🔔 Напоминание: "+msg))
+	}(upd.Message.Chat.ID, duration, message)
 }
