@@ -38,7 +38,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// health‑check
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
@@ -120,20 +119,17 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// сгруппировать по категории
 	groups := map[string][]Reminder{}
 	for _, r := range reminders {
 		if r.ChatID == chatID {
 			groups[r.Category] = append(groups[r.Category], r)
 		}
 	}
-
 	if len(groups) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "📋 Нет активных напоминаний"))
 		return
 	}
 
-	// простой вывод: категории в алфавитном порядке
 	cats := make([]string, 0, len(groups))
 	for c := range groups {
 		cats = append(cats, c)
@@ -145,13 +141,13 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	for _, cat := range cats {
 		lines = append(lines, fmt.Sprintf("🔖 *%s*:", cat))
 		for _, r := range groups[cat] {
-			rem := fmt.Sprintf("• %s (через %s)", r.Note, time.Until(r.At).Truncate(time.Second))
-			lines = append(lines, rem)
+			remaining := time.Until(r.At).Truncate(time.Second)
+			lines = append(lines, fmt.Sprintf("• %s (через %s)", r.Note, remaining))
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData("❌ Удалить", r.ID),
 			))
 		}
-		lines = append(lines, "") // пустая строка между группами
+		lines = append(lines, "")
 	}
 
 	msg := tgbotapi.NewMessage(chatID, strings.Join(lines, "\n"))
@@ -178,15 +174,39 @@ func removeByID(id string) {
 	}
 }
 
-// classify присваивает заметке тему по ключевым словам
+// classify присваивает тему по расширенному набору ключевых слов
 func classify(text string) string {
 	switch {
-	case containsAny(text, "код", "проект", "собеседование", "отчет"):
+	// Работа
+	case containsAny(text,
+		"код", "проект", "встреча", "митинг", "дедлайн", "отчет", "презентация", "доклад", "задача", "собеседование"):
 		return "Работа"
-	case containsAny(text, "учеба", "лекция", "дз", "экзамен", "учить"):
+
+	// Учёба
+	case containsAny(text,
+		"лекция", "семинар", "дз", "экзамен", "тест", "реферат", "курс", "университет", "колледж", "школа", "учить", "парам", "лаба"):
 		return "Учёба"
-	case containsAny(text, "прогулка", "спорт", "здоровье", "медицина", "аптека"):
+
+	// Здоровье
+	case containsAny(text,
+		"спорт", "тренировка", "прогулка", "здоровье", "медицина", "аптека", "лекарство", "диета", "врач", "анализ", "йога", "медитация"):
 		return "Здоровье"
+
+	// Дом и быт
+	case containsAny(text,
+		"уборка", "стирка", "готовка", "помыть", "ремонт", "купить продукты", "посуда", "мусор", "прачка", "сад"):
+		return "Дом"
+
+	// Покупки и финансы
+	case containsAny(text,
+		"купить", "заказать", "пополнить", "бюджет", "счета", "оплатить", "платеж", "налоги", "банк", "карта", "расход"):
+		return "Покупки/Финансы"
+
+	// Развлечения
+	case containsAny(text,
+		"кино", "сериал", "игра", "музыка", "книга", "встреча с", "вечеринка", "отдых", "путешествие", "хобби", "концерт"):
+		return "Развлечения"
+
 	default:
 		return "Другое"
 	}
