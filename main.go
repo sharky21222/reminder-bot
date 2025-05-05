@@ -233,9 +233,7 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	// ✅ Сначала отправляем подтверждение Telegram
 	callback := tgbotapi.NewCallback(cq.ID, "")
-	callback.ShowAlert = false
 	bot.Request(callback)
 
 	id := cq.Data
@@ -250,6 +248,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 			delete(timers, rid)
 		}
 		removeByID(rid)
+		delete(pendingNote, chatID)
 		mu.Unlock()
 
 		bot.Send(tgbotapi.NewMessage(chatID, "✅ Задача отмечена как выполненная."))
@@ -262,6 +261,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 		delete(timers, id)
 	}
 	removeByID(id)
+	delete(pendingNote, chatID)
 	mu.Unlock()
 
 	bot.Send(tgbotapi.NewMessage(chatID, "✅ Напоминание удалено"))
