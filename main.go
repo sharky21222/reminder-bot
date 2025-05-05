@@ -12,7 +12,6 @@ import (
 )
 
 func main() {
-	// Получаем токен
 	token := os.Getenv("TELEGRAM_BOT_TOKEN")
 	if token == "" {
 		log.Fatal("🚫 TELEGRAM_BOT_TOKEN не задан")
@@ -23,13 +22,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Health‑check endpoint
+	// health‑check
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
 	go http.ListenAndServe(":8081", nil)
 
-	// Клавиатура
+	// клавиатура
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -47,29 +46,25 @@ func main() {
 		}
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
-		// Если пользователь написал "привет" anywhere
-		if strings.Contains(text, "привет") {
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот-напоминалка.")
+		// любое сообщение сразу показывает меню
+		if text != "" {
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "📋 Меню:")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
-			continue
 		}
 
-		// Обработка остальных команд
+		// дальше обрабатываем специальные команды
 		switch {
-		// /start
 		case text == "/start":
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот-напоминалка.")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-		// кнопка "📝 Напомни мне"
 		case text == "📝 напомни мне":
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "✍ Введи, например: через 5 сек пойти гулять")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-		// /help или кнопка помощь
 		case text == "/help" || text == "📖 помощь":
 			help := "📚 Команды:\n" +
 				"/remind <время> <текст>\n" +
@@ -79,47 +74,24 @@ func main() {
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-		// /menu
-		case text == "/menu":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "📋 Меню")
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
-
-		// естественный ввод: "через N единица текст"
 		case strings.HasPrefix(text, "через "):
 			if dur, note, ok := parseNatural(text); ok {
 				schedule(bot, upd.Message.Chat.ID, dur, note)
-			} else {
-				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: через 5 сек текст")
-				msg.ReplyMarkup = menu
-				bot.Send(msg)
 			}
 
-		// /remind команда
 		case strings.HasPrefix(text, "/remind"):
 			parts := strings.SplitN(text, " ", 3)
-			if len(parts) < 3 {
-				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ /remind <время> <текст>")
-				msg.ReplyMarkup = menu
-				bot.Send(msg)
-			} else if dur, note, ok := parseNatural(parts[1] + " " + parts[2]); ok {
-				schedule(bot, upd.Message.Chat.ID, dur, note)
-			} else {
-				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: /remind 10s текст")
-				msg.ReplyMarkup = menu
-				bot.Send(msg)
+			if len(parts) >= 3 {
+				if dur, note, ok := parseNatural(parts[1] + " " + parts[2]); ok {
+					schedule(bot, upd.Message.Chat.ID, dur, note)
+				}
 			}
 
-		// всё остальное
-		default:
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "🤖 Не понял. Нажми /help")
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
+			// больше не отправляем "не понял" — меню уже показано
 		}
 	}
 }
 
-// schedule отправляет подтверждение и по таймеру напоминание
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
 	confirm := tgbotapi.NewMessage(chatID, "⏳ Ок, напомню через "+d.String())
 	bot.Send(confirm)
@@ -131,7 +103,6 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 
 var re = regexp.MustCompile(`через\s+(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)\s*(.*)`)
 
-// parseNatural разбирает текст и возвращает duration, note, ok
 func parseNatural(text string) (time.Duration, string, bool) {
 	m := re.FindStringSubmatch(text)
 	if len(m) != 4 {
