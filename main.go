@@ -82,7 +82,6 @@ func main() {
 					delete(pendingNote, chatID)
 					schedule(bot, chatID, d, note, repeatSettings[chatID])
 
-					// ✅ Отправляем подтверждение пользователю
 					durationText := m[1] + " " + m[2]
 					bot.Send(tgbotapi.NewMessage(chatID,
 						fmt.Sprintf("✅ Запомнил! Напомню через %s", durationText)))
@@ -177,16 +176,15 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 	mu.Lock()
 	defer mu.Unlock()
 
-	if t, exists := timers[id]; exists {
+	if t, exists := timers[id]; exists && repeat {
 		t.Stop()
 		delete(timers, id)
-	}
 
-	if repeat {
+		// Перезапуск напоминания
 		timers[id] = time.AfterFunc(interval, func() {
 			sendReminder(bot, chatID, note, id, repeat)
 		})
-	} else {
+	} else if !repeat {
 		time.AfterFunc(time.Minute, func() {
 			removeByID(id)
 		})
@@ -235,7 +233,7 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	// ⚠️ Сначала отправляем ответ на CallbackQuery, чтобы убрать мерцание
+	// ✅ Сначала отправляем подтверждение Telegram
 	callback := tgbotapi.NewCallback(cq.ID, "")
 	callback.ShowAlert = false
 	bot.Request(callback)
