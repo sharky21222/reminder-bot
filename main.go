@@ -20,6 +20,7 @@ type Reminder struct {
 }
 
 var (
+	// Парсим любую фразу вида "число + единица + текст"
 	re        = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)\s*(.*)`)
 	reminders = make([]Reminder, 0)
 	mu        sync.Mutex
@@ -35,11 +36,13 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Health‑check
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
 	go http.ListenAndServe(":8081", nil)
 
+	// Клавиатура с двумя кнопками
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -57,7 +60,7 @@ func main() {
 		}
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
-		// /start или «привет» показываем меню
+		// /start или "привет" → показать меню
 		if text == "/start" || strings.Contains(text, "привет") {
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот‑напоминалка.")
 			msg.ReplyMarkup = menu
@@ -65,38 +68,35 @@ func main() {
 			continue
 		}
 
-		// команда /help
-		if text == "/help" {
+		// Обработка кнопок и команд
+		switch {
+		// Кнопка "📝 Напомни мне"
+		case text == "📝 напомни мне":
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID,
+				"✍ Введите, например:\nнапомни через 5 сек пойти гулять")
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
+
+		// Кнопка "📋 Список"
+		case text == "📋 список":
+			sendList(bot, upd.Message.Chat.ID)
+
+		// /help
+		case text == "/help":
 			help := "📚 Команды:\n" +
 				"/remind <время> <текст>\n" +
 				"Например: напомни через 5 сек пойти гулять\n" +
 				"📝 Напомни мне — подсказка\n" +
 				"📋 Список — активные напоминания"
 			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, help))
-			continue
-		}
 
-		// кнопка «📝 Напомни мне»
-		if text == "📝 напомни мне" {
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "✍ Введите, например:\nнапомни через 5 сек пойти гулять")
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
-			continue
+		// Универсальный парсинг любой фразы с временем
+		default:
+			if dur, note, ok := parseAny(text); ok {
+				schedule(bot, upd.Message.Chat.ID, dur, note)
+			}
+			// иначе молчим — меню уже видно после /start
 		}
-
-		// кнопка «📋 Список»
-		if text == "📋 список" {
-			sendList(bot, upd.Message.Chat.ID)
-			continue
-		}
-
-		// универсальный парсинг любых фраз, содержащих pattern «N единица текст»
-		if dur, note, ok := parseAny(text); ok {
-			schedule(bot, upd.Message.Chat.ID, dur, note)
-			continue
-		}
-
-		// всё остальное — ничего не показываем
 	}
 }
 
@@ -110,6 +110,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	go func() {
 		time.Sleep(d)
 		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
+		// удалить отработавшее
 		mu.Lock()
 		defer mu.Unlock()
 		for i, r := range reminders {
@@ -138,12 +139,12 @@ func sendList(bot *tgbotapi.BotAPI, chatID int64) {
 	}
 }
 
-// parseAny ловит и "/remind 5s ..." и "напомни через 5 сек ..." и "через 5s ..."
+// parseAny ловит и "/remind 5s ...", и "напомни через 5 сек ...", и "через 5m ..."
 func parseAny(text string) (time.Duration, string, bool) {
-	// убираем префиксы
+	// убрать префиксы
 	text = strings.TrimPrefix(text, "/remind ")
 	text = strings.TrimPrefix(text, "напомни ")
-	// ищем число+unit+note
+	// найти число, единицу, заметку
 	m := re.FindStringSubmatch(text)
 	if len(m) != 4 {
 		return 0, "", false
