@@ -140,9 +140,16 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	id := cq.Data
-	removeByID(id)
-	bot.AnswerCallbackQuery(tgbotapi.NewCallback(cq.ID, "Удалено"))
+	// удаляем напоминание
+	removeByID(cq.Data)
+
+	// отвечаем на сам callback, чтобы кнопка “зависла” не висела
+	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
+	if _, err := bot.Request(callback); err != nil {
+		log.Println("Ошибка AnswerCallbackQuery:", err)
+	}
+
+	// опционально шлём в чат подтверждение
 	bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Напоминание удалено"))
 }
 
