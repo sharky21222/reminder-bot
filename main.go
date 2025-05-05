@@ -82,6 +82,7 @@ func main() {
 					delete(pendingNote, chatID)
 					schedule(bot, chatID, d, note, repeatSettings[chatID])
 
+					// ✅ Отправляем подтверждение пользователю
 					durationText := m[1] + " " + m[2]
 					bot.Send(tgbotapi.NewMessage(chatID,
 						fmt.Sprintf("✅ Запомнил! Напомню через %s", durationText)))
@@ -126,7 +127,7 @@ func main() {
 
 		default:
 			pendingNote[chatID] = upd.Message.Text
-			msg := tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить? (например: 10 сек, 5 мин, 1 час)")
+			msg := tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить? (например: 10s, 5m, 1h)")
 			bot.Send(msg)
 		}
 	}
@@ -176,15 +177,16 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 	mu.Lock()
 	defer mu.Unlock()
 
-	if t, exists := timers[id]; exists && repeat {
+	if t, exists := timers[id]; exists {
 		t.Stop()
 		delete(timers, id)
+	}
 
-		// Перезапуск напоминания
+	if repeat {
 		timers[id] = time.AfterFunc(interval, func() {
 			sendReminder(bot, chatID, note, id, repeat)
 		})
-	} else if !repeat {
+	} else {
 		time.AfterFunc(time.Minute, func() {
 			removeByID(id)
 		})
@@ -233,35 +235,35 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	callback := tgbotapi.NewCallback(cq.ID, "")
-	bot.Request(callback)
-
 	id := cq.Data
 	chatID := cq.Message.Chat.ID
 
 	if strings.HasPrefix(id, "done_") {
 		rid := strings.TrimPrefix(id, "done_")
-
 		mu.Lock()
-		if t, exists := timers[rid]; exists {
+		if t, ok := timers[rid]; ok {
 			t.Stop()
 			delete(timers, rid)
 		}
 		removeByID(rid)
 		mu.Unlock()
 
+		callback := tgbotapi.NewCallback(cq.ID, "Отлично! Выполнено.")
+		bot.Request(callback)
 		bot.Send(tgbotapi.NewMessage(chatID, "✅ Задача отмечена как выполненная."))
 		return
 	}
 
 	mu.Lock()
-	if t, exists := timers[id]; exists {
+	if t, ok := timers[id]; ok {
 		t.Stop()
 		delete(timers, id)
 	}
 	removeByID(id)
 	mu.Unlock()
 
+	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
+	bot.Request(callback)
 	bot.Send(tgbotapi.NewMessage(chatID, "✅ Напоминание удалено"))
 }
 
