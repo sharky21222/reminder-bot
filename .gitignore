@@ -1,0 +1,11 @@
+# Бинарники и БД
+*.exe
+*.db
+
+# Fly и Docker служебные
+.fly/
+docker-compose.yml
+
+# IDE и логи
+.vscode/
+*.log
