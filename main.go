@@ -68,22 +68,28 @@ func main() {
 				"/remind <время> <текст>\n" +
 				"Например: через 5 сек пойти гулять\n" +
 				"/menu — показать меню"
-			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, help).SetReplyMarkup(menu))
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, help)
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
 			continue
 		}
 
 		// /menu
 		if text == "/menu" {
-			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "📋 Меню").SetReplyMarkup(menu))
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "📋 Меню")
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
 			continue
 		}
 
-		// естественный ввод: "через N сек/мин/час …"
+		// естественный ввод: "через N …"
 		if strings.HasPrefix(text, "через ") {
 			if dur, note, ok := parseNatural(text); ok {
 				schedule(bot, upd.Message.Chat.ID, dur, note)
 			} else {
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: через 5 сек текст").SetReplyMarkup(menu))
+				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: через 5 сек текст")
+				msg.ReplyMarkup = menu
+				bot.Send(msg)
 			}
 			continue
 		}
@@ -92,24 +98,31 @@ func main() {
 		if strings.HasPrefix(text, "/remind") {
 			parts := strings.SplitN(text, " ", 3)
 			if len(parts) < 3 {
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ /remind <время> <текст>").SetReplyMarkup(menu))
+				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⚠️ /remind <время> <текст>")
+				msg.ReplyMarkup = menu
+				bot.Send(msg)
 				continue
 			}
 			if dur, note, ok := parseNatural(parts[1] + " " + parts[2]); ok {
 				schedule(bot, upd.Message.Chat.ID, dur, note)
 			} else {
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: /remind 10s текст").SetReplyMarkup(menu))
+				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "⛔ Формат: /remind 10s текст")
+				msg.ReplyMarkup = menu
+				bot.Send(msg)
 			}
 			continue
 		}
 
-		// не распознано
-		bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "🤖 Не понял. Нажми /help").SetReplyMarkup(menu))
+		// всё остальное
+		msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "🤖 Не понял. Нажми /help")
+		msg.ReplyMarkup = menu
+		bot.Send(msg)
 	}
 }
 
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
-	bot.Send(tgbotapi.NewMessage(chatID, "⏳ Ок, напомню через "+d.String()))
+	msg := tgbotapi.NewMessage(chatID, "⏳ Ок, напомню через "+d.String())
+	bot.Send(msg)
 	go func() {
 		time.Sleep(d)
 		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
