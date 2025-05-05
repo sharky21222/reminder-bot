@@ -145,7 +145,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 }
 
 func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool, d time.Duration) {
-	interval := 5 * time.Minute
+	interval := 1 * time.Minute
 	msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
