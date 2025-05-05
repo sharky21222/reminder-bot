@@ -45,7 +45,7 @@ func main() {
 		}
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
-		// Привет или /start → показываем меню
+		// только на /start или на "привет" показываем меню
 		if text == "/start" || strings.Contains(text, "привет") {
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот‑напоминалка.")
 			msg.ReplyMarkup = menu
@@ -54,9 +54,10 @@ func main() {
 		}
 
 		switch {
-		// кнопка "📝 Напомни мне"
+		// кнопка "📝 Напомни мне" — показываем только подсказку
 		case text == "📝 напомни мне":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "✍ Введи, например:\nчерез 5 сек пойти гулять")
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID,
+				"✍ Введи, например:\nчерез 5 сек пойти гулять")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
@@ -67,7 +68,7 @@ func main() {
 					"/remind <время> <текст>\n"+
 					"Например: через 5 сек пойти гулять"))
 
-		// естественный ввод: "через N …"
+		// естественный ввод напоминания
 		case strings.HasPrefix(text, "через "):
 			if dur, note, ok := parseNatural(text); ok {
 				schedule(bot, upd.Message.Chat.ID, dur, note)
@@ -81,8 +82,6 @@ func main() {
 					schedule(bot, upd.Message.Chat.ID, dur, note)
 				}
 			}
-
-			// любое другое — просто игнорируем (меню не показываем)
 		}
 	}
 }
