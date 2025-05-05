@@ -23,11 +23,12 @@ type Reminder struct {
 }
 
 var (
-	re        = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)\s*(.*)`)
-	wordRe    = regexp.MustCompile(`\p{L}+`)
-	reminders = make([]Reminder, 0)
-	timers    = make(map[string]*time.Timer)
-	mu        sync.Mutex
+	re          = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
+	wordRe      = regexp.MustCompile(`\p{L}+`)
+	reminders   = make([]Reminder, 0)
+	timers      = make(map[string]*time.Timer)
+	pendingNote = make(map[int64]string) // chatID → note, ожидает время
+	mu          sync.Mutex
 )
 
 func main() {
@@ -40,6 +41,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// health‑check
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
@@ -64,37 +66,48 @@ func main() {
 		if upd.Message == nil {
 			continue
 		}
+		chatID := upd.Message.Chat.ID
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
-		if text == "/start" || strings.Contains(text, "привет") {
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот‑напоминалка.")
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
+		// если ждём от этого чата время
+		if note, ok := pendingNote[chatID]; ok {
+			// попытаться распарсить время
+			if m := re.FindStringSubmatch(text); len(m) == 3 {
+				d, err := time.ParseDuration(m[1] + unitSuffix(m[2]))
+				if err == nil {
+					delete(pendingNote, chatID)
+					schedule(bot, chatID, d, note)
+					continue
+				}
+			}
+			bot.Send(tgbotapi.NewMessage(chatID, "⛔ Неверный формат времени. Примеры: 10s, 5m, 1h"))
 			continue
 		}
 
 		switch {
-		case text == "📝 напомни мне":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID,
-				"✍ Введите, например:\nнапомни через 5 сек пойти гулять")
+		case text == "/start" || strings.Contains(text, "привет"):
+			msg := tgbotapi.NewMessage(chatID, "👋 Привет! Я бот‑напоминалка.")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
+		case text == "📝 напомни мне":
+			bot.Send(tgbotapi.NewMessage(chatID, "✍ Что напомнить?"))
+
 		case text == "📋 список":
-			showList(bot, upd.Message.Chat.ID)
+			showList(bot, chatID)
 
 		case text == "/help":
-			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
-				"📚 Команды:\n"+
-					"/remind <время> <текст>\n"+
-					"Например: напомни через 5 сек пойти гулять\n"+
-					"📝 Напомни мне — подсказка\n"+
+			bot.Send(tgbotapi.NewMessage(chatID,
+				"📚 Напишите то, что хотите запомнить — бот спросит “Через сколько?”\n"+
+					"Или команды:\n"+
+					"📝 Напомни мне — начать диалог\n"+
 					"📋 Список — активные напоминания"))
 
 		default:
-			if dur, note, ok := parseAny(text); ok {
-				schedule(bot, upd.Message.Chat.ID, dur, note)
-			}
+			// свободный текст: начинаем диалог
+			pendingNote[chatID] = upd.Message.Text
+			msg := tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить? (например: 10s, 5m, 1h)")
+			bot.Send(msg)
 		}
 	}
 }
@@ -104,18 +117,16 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
 	category := classify(note)
 
-	// сохраняем напоминание
 	mu.Lock()
 	reminders = append(reminders, Reminder{ID: id, ChatID: chatID, Note: note, At: at, Category: category})
-	// создаём таймер и сохраняем его
 	timers[id] = time.AfterFunc(d, func() {
 		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
 		removeByID(id)
 	})
 	mu.Unlock()
 
-	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf(
-		"⏳ Ок, напомню через %s\nКатегория: %s", d.String(), category)))
+	bot.Send(tgbotapi.NewMessage(chatID,
+		fmt.Sprintf("✅ Запомнил! Напомню через %s (Категория: %s)", d.String(), category)))
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
@@ -162,7 +173,6 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	id := cq.Data
 
-	// остановить таймер и удалить напоминание
 	mu.Lock()
 	if t, ok := timers[id]; ok {
 		t.Stop()
@@ -171,7 +181,6 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	removeByID(id)
 	mu.Unlock()
 
-	// ответить на кнопку
 	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
 	bot.Request(callback)
 	bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Напоминание удалено"))
@@ -218,28 +227,20 @@ func containsRoot(text string, roots ...string) bool {
 	return false
 }
 
-func parseAny(text string) (time.Duration, string, bool) {
-	text = strings.TrimPrefix(text, "/remind ")
-	text = strings.TrimPrefix(text, "напомни ")
-	m := re.FindStringSubmatch(text)
-	if len(m) != 4 {
-		return 0, "", false
-	}
-	num, unit, note := m[1], m[2], m[3]
-	var suf string
+func unitSuffix(u string) string {
+	u = strings.ToLower(u)
 	switch {
-	case strings.HasPrefix(unit, "сек"), unit == "с":
-		suf = "s"
-	case strings.HasPrefix(unit, "мин"), unit == "m":
-		suf = "m"
-	case strings.HasPrefix(unit, "час"), unit == "h", unit == "ч":
-		suf = "h"
-	default:
-		return 0, "", false
+	case strings.HasPrefix(u, "сек"):
+		return "s"
+	case strings.HasPrefix(u, "мин"):
+		return "m"
+	case strings.HasPrefix(u, "ч"):
+		return "h"
 	}
-	d, err := time.ParseDuration(num + suf)
-	if err != nil {
-		return 0, "", false
-	}
-	return d, note, true
+	return ""
+}
+
+func parseAny(text string) (time.Duration, string, bool) {
+	// не используется в диалоге
+	return 0, "", false
 }
