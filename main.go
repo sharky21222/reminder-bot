@@ -248,7 +248,6 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 			delete(timers, rid)
 		}
 		removeByID(rid)
-		delete(pendingNote, chatID)
 		mu.Unlock()
 
 		bot.Send(tgbotapi.NewMessage(chatID, "✅ Задача отмечена как выполненная."))
@@ -261,7 +260,6 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 		delete(timers, id)
 	}
 	removeByID(id)
-	delete(pendingNote, chatID)
 	mu.Unlock()
 
 	bot.Send(tgbotapi.NewMessage(chatID, "✅ Напоминание удалено"))
