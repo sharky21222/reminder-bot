@@ -127,7 +127,7 @@ func main() {
 
 		default:
 			pendingNote[chatID] = upd.Message.Text
-			msg := tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить? (например: 10s, 5m, 1h)")
+			msg := tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить? (например: 10 сек, 5 мин, 1 час)")
 			bot.Send(msg)
 		}
 	}
