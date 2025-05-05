@@ -51,19 +51,18 @@ func main() {
 		msgText := upd.Message.Text
 
 		// /start
-		if msgText == "/start" {
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Привет! Я помогу тебе с напоминаниями.")
+		if msgText == "/menu" {
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Вот меню:")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 			continue
 		}
 
 		// /help
-		if msgText == "/help" {
-			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
-				`Напиши сообщение вроде:
-"напомни мне через 10s сделать зарядку"
-"напомни через 5m позвонить другу"`))
+		if msgText == "/menu" {
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Вот меню:")
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
 			continue
 		}
 
