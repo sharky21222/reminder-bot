@@ -235,35 +235,37 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
+	// ⚠️ Сначала отправляем ответ на CallbackQuery, чтобы убрать мерцание
+	callback := tgbotapi.NewCallback(cq.ID, "")
+	callback.ShowAlert = false
+	bot.Request(callback)
+
 	id := cq.Data
 	chatID := cq.Message.Chat.ID
 
 	if strings.HasPrefix(id, "done_") {
 		rid := strings.TrimPrefix(id, "done_")
+
 		mu.Lock()
-		if t, ok := timers[rid]; ok {
+		if t, exists := timers[rid]; exists {
 			t.Stop()
 			delete(timers, rid)
 		}
 		removeByID(rid)
 		mu.Unlock()
 
-		callback := tgbotapi.NewCallback(cq.ID, "Отлично! Выполнено.")
-		bot.Request(callback)
 		bot.Send(tgbotapi.NewMessage(chatID, "✅ Задача отмечена как выполненная."))
 		return
 	}
 
 	mu.Lock()
-	if t, ok := timers[id]; ok {
+	if t, exists := timers[id]; exists {
 		t.Stop()
 		delete(timers, id)
 	}
 	removeByID(id)
 	mu.Unlock()
 
-	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
-	bot.Request(callback)
 	bot.Send(tgbotapi.NewMessage(chatID, "✅ Напоминание удалено"))
 }
 
