@@ -24,7 +24,9 @@ type Reminder struct {
 
 var (
 	re        = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)\s*(.*)`)
+	wordRe    = regexp.MustCompile(`\p{L}+`)
 	reminders = make([]Reminder, 0)
+	timers    = make(map[string]*time.Timer)
 	mu        sync.Mutex
 )
 
@@ -102,17 +104,18 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
 	category := classify(note)
 
+	// сохраняем напоминание
 	mu.Lock()
 	reminders = append(reminders, Reminder{ID: id, ChatID: chatID, Note: note, At: at, Category: category})
+	// создаём таймер и сохраняем его
+	timers[id] = time.AfterFunc(d, func() {
+		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
+		removeByID(id)
+	})
 	mu.Unlock()
 
 	bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf(
 		"⏳ Ок, напомню через %s\nКатегория: %s", d.String(), category)))
-	go func() {
-		time.Sleep(d)
-		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
-		removeByID(id)
-	}()
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
@@ -157,65 +160,59 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	removeByID(cq.Data)
+	id := cq.Data
+
+	// остановить таймер и удалить напоминание
+	mu.Lock()
+	if t, ok := timers[id]; ok {
+		t.Stop()
+		delete(timers, id)
+	}
+	removeByID(id)
+	mu.Unlock()
+
+	// ответить на кнопку
 	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
 	bot.Request(callback)
 	bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Напоминание удалено"))
 }
 
 func removeByID(id string) {
-	mu.Lock()
-	defer mu.Unlock()
 	for i, r := range reminders {
 		if r.ID == id {
 			reminders = append(reminders[:i], reminders[i+1:]...)
-			return
+			break
 		}
 	}
 }
 
-// classify присваивает тему по расширенному набору ключевых слов
 func classify(text string) string {
 	switch {
-	// Работа
-	case containsAny(text,
-		"код", "проект", "встреча", "митинг", "дедлайн", "отчет", "презентация", "доклад", "задача", "собеседование"):
+	case containsRoot(text, "код", "проект", "встреч", "митинг", "дедлайн", "отчет", "презентац", "доклад", "задач", "собеседован"):
 		return "Работа"
-
-	// Учёба
-	case containsAny(text,
-		"лекция", "семинар", "дз", "экзамен", "тест", "реферат", "курс", "университет", "колледж", "школа", "учить", "парам", "лаба"):
+	case containsRoot(text, "лекц", "семинар", "дз", "экзамен", "тест", "реферат", "курс", "университет", "колледж", "школ", "уч"):
 		return "Учёба"
-
-	// Здоровье
-	case containsAny(text,
-		"спорт", "тренировка", "прогулка", "здоровье", "медицина", "аптека", "лекарство", "диета", "врач", "анализ", "йога", "медитация"):
+	case containsRoot(text, "спор", "тренир", "прогул", "здоров", "медицин", "аптек", "лекарств", "диет", "врач", "анализ", "йог", "медит"):
 		return "Здоровье"
-
-	// Дом и быт
-	case containsAny(text,
-		"уборка", "стирка", "готовка", "помыть", "ремонт", "купить продукты", "посуда", "мусор", "прачка", "сад"):
+	case containsRoot(text, "уборк", "стирк", "готовк", "помыв", "ремонт", "куп", "посуд", "мусор", "прачк", "сад"):
 		return "Дом"
-
-	// Покупки и финансы
-	case containsAny(text,
-		"купить", "заказать", "пополнить", "бюджет", "счета", "оплатить", "платеж", "налоги", "банк", "карта", "расход"):
+	case containsRoot(text, "куп", "заказ", "пополн", "бюджет", "счет", "оплат", "платеж", "налог", "банк", "карт", "расход"):
 		return "Покупки/Финансы"
-
-	// Развлечения
-	case containsAny(text,
-		"кино", "сериал", "игра", "музыка", "книга", "встреча с", "вечеринка", "отдых", "путешествие", "хобби", "концерт"):
+	case containsRoot(text, "кин", "сериал", "игр", "музык", "книж", "встреч", "вечеринк", "отдых", "путешеств", "хобби", "концерт"):
 		return "Развлечения"
-
 	default:
 		return "Другое"
 	}
 }
 
-func containsAny(s string, keywords ...string) bool {
-	for _, k := range keywords {
-		if strings.Contains(s, k) {
-			return true
+func containsRoot(text string, roots ...string) bool {
+	words := wordRe.FindAllString(strings.ToLower(text), -1)
+	for _, w := range words {
+		for _, root := range roots {
+			r := strings.ToLower(root)
+			if strings.HasPrefix(w, r) || strings.HasPrefix(r, w) {
+				return true
+			}
 		}
 	}
 	return false
