@@ -81,12 +81,6 @@ func main() {
 				if err == nil {
 					delete(pendingNote, chatID)
 					schedule(bot, chatID, d, note, repeatSettings[chatID])
-
-					// ✅ Отправляем подтверждение пользователю
-					durationText := m[1] + " " + m[2]
-					bot.Send(tgbotapi.NewMessage(chatID,
-						fmt.Sprintf("✅ Запомнил! Напомню через %s", durationText)))
-
 					continue
 				}
 			}
@@ -149,6 +143,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 	})
 	mu.Unlock()
 
+	// Первое напоминание через указанное время
 	timer := time.AfterFunc(d, func() {
 		sendReminder(bot, chatID, note, id, repeat)
 	})
@@ -158,7 +153,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 }
 
 func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool) {
-	interval := 5 * time.Minute
+	interval := 1 * time.Minute
 	msgText := "🔔 Напоминание: " + note
 
 	var msg tgbotapi.MessageConfig
@@ -183,10 +178,12 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 	}
 
 	if repeat {
+		// Повторяем каждые 5 минут
 		timers[id] = time.AfterFunc(interval, func() {
 			sendReminder(bot, chatID, note, id, repeat)
 		})
 	} else {
+		// Удаляем через 1 мин после первого уведомления
 		time.AfterFunc(time.Minute, func() {
 			removeByID(id)
 		})
@@ -236,7 +233,6 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	id := cq.Data
-	chatID := cq.Message.Chat.ID
 
 	if strings.HasPrefix(id, "done_") {
 		rid := strings.TrimPrefix(id, "done_")
@@ -250,7 +246,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 
 		callback := tgbotapi.NewCallback(cq.ID, "Отлично! Выполнено.")
 		bot.Request(callback)
-		bot.Send(tgbotapi.NewMessage(chatID, "✅ Задача отмечена как выполненная."))
+		bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Задача отмечена как выполненная."))
 		return
 	}
 
@@ -264,7 +260,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 
 	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
 	bot.Request(callback)
-	bot.Send(tgbotapi.NewMessage(chatID, "✅ Напоминание удалено"))
+	bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Напоминание удалено"))
 }
 
 func removeByID(id string) {
