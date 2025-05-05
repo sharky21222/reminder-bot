@@ -29,7 +29,7 @@ var (
 	reminders      = make([]Reminder, 0)
 	timers         = make(map[string]*time.Timer)
 	pendingNote    = make(map[int64]string)
-	repeatSettings = make(map[int64]bool) // хранение настроек повтора
+	repeatSettings = make(map[int64]bool)
 	mu             sync.Mutex
 )
 
@@ -48,7 +48,6 @@ func main() {
 	})
 	go http.ListenAndServe(":8081", nil)
 
-	// Меню с кнопкой "Повторять напоминания" внизу
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -144,7 +143,13 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 	})
 	mu.Unlock()
 
-	sendReminder(bot, chatID, note, id, repeat)
+	// Первое напоминание через указанное время
+	timer := time.AfterFunc(d, func() {
+		sendReminder(bot, chatID, note, id, repeat)
+	})
+	mu.Lock()
+	timers[id] = timer
+	mu.Unlock()
 }
 
 func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool) {
@@ -153,7 +158,6 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 
 	var msg tgbotapi.MessageConfig
 	if repeat {
-		// Только если повтор включён — показываем кнопку "Выполнено"
 		msg = tgbotapi.NewMessage(chatID, msgText)
 		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -161,10 +165,8 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 			),
 		)
 	} else {
-		// Если повтор выключен — просто текстовое сообщение
 		msg = tgbotapi.NewMessage(chatID, msgText)
 	}
-
 	bot.Send(msg)
 
 	mu.Lock()
@@ -172,6 +174,7 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 
 	if t, exists := timers[id]; exists {
 		t.Stop()
+		delete(timers, id)
 	}
 
 	if repeat {
@@ -180,8 +183,8 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 			sendReminder(bot, chatID, note, id, repeat)
 		})
 	} else {
-		// Удаляем через 1 минуту после первого уведомления
-		timers[id] = time.AfterFunc(time.Minute, func() {
+		// Удаляем через 1 мин после первого уведомления
+		time.AfterFunc(time.Minute, func() {
 			removeByID(id)
 		})
 	}
@@ -262,7 +265,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 
 func removeByID(id string) {
 	mu.Lock()
-	defer mu.Lock()
+	defer mu.Unlock()
 
 	for i, r := range reminders {
 		if r.ID == id {
