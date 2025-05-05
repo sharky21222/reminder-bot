@@ -52,10 +52,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("OK"))
-	})
-	go http.ListenAndServe(":8081", nil)
+	// Простейший health check
+	go func() {
+		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte("OK"))
+		})
+		err := http.ListenAndServe(":8081", nil)
+		if err != nil {
+			log.Printf("⚠️ HTTP сервер остановлен: %v", err)
+		}
+	}()
 
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
@@ -73,6 +79,7 @@ func main() {
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
 
+	log.Println("🟢 Бот запущен и готов к работе...")
 	for upd := range updates {
 		if upd.CallbackQuery != nil {
 			handleCallback(bot, upd.CallbackQuery)
@@ -85,14 +92,13 @@ func main() {
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
 		if note, ok := pendingNote[chatID]; ok {
-			// Парсим время
 			now := time.Now()
 			t, err := w.Parse(text, now)
 			if err != nil || t == nil {
 				// Если не получилось — пробуем как относительное время
 				if m := re.FindStringSubmatch(text); len(m) == 3 {
-					d, err := time.ParseDuration(m[1] + unitSuffix(m[2]))
-					if err == nil {
+					d, parseErr := time.ParseDuration(m[1] + unitSuffix(m[2]))
+					if parseErr == nil {
 						delete(pendingNote, chatID)
 						schedule(bot, chatID, d, note, repeatSettings[chatID])
 
@@ -107,9 +113,12 @@ func main() {
 			}
 
 			delete(pendingNote, chatID)
-			scheduleAbsolute(bot, chatID, t.Time, note, repeatSettings[chatID])
+			if t.Time.Before(time.Now()) {
+				bot.Send(tgbotapi.NewMessage(chatID, "⏰ Нельзя ставить напоминание на прошедшее время"))
+				continue
+			}
 
-			// Отправляем подтверждение
+			scheduleAbsolute(bot, chatID, t.Time, note, repeatSettings[chatID])
 			formattedTime := t.Time.Format("02.01.2006 в 15:04")
 			bot.Send(tgbotapi.NewMessage(chatID,
 				fmt.Sprintf("✅ Запомнил! Напомню %s", formattedTime)))
@@ -221,17 +230,18 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 	bot.Send(msg)
 
 	mu.Lock()
-	defer mu.Unlock()
-
 	if t, exists := timers[id]; exists {
 		t.Stop()
 		delete(timers, id)
 	}
+	mu.Unlock()
 
 	if repeat {
+		mu.Lock()
 		timers[id] = time.AfterFunc(interval, func() {
 			sendReminder(bot, chatID, note, id, repeat)
 		})
+		mu.Unlock()
 	} else {
 		time.AfterFunc(time.Minute, func() {
 			removeByID(id)
