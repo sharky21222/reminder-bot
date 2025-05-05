@@ -14,13 +14,14 @@ import (
 )
 
 type Reminder struct {
-	ID     string // уникальный идентификатор
+	ID     string
 	ChatID int64
 	Note   string
 	At     time.Time
 }
 
 var (
+	// регэксп для поиска "число + единица + текст"
 	re        = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)\s*(.*)`)
 	reminders = make([]Reminder, 0)
 	mu        sync.Mutex
@@ -36,12 +37,13 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// health‑check
+	// health‑check endpoint
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("OK"))
 	})
 	go http.ListenAndServe(":8081", nil)
 
+	// клавиатура с кнопками "Напомни мне" и "Список"
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -54,7 +56,7 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	for upd := range updates {
-		// Обработка callback‑запроса от inline‑кнопки
+		// inline callback
 		if upd.CallbackQuery != nil {
 			handleCallback(bot, upd.CallbackQuery)
 			continue
@@ -65,6 +67,7 @@ func main() {
 		}
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
+		// /start или "привет" — показать меню
 		if text == "/start" || strings.Contains(text, "привет") {
 			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот‑напоминалка.")
 			msg.ReplyMarkup = menu
@@ -83,12 +86,12 @@ func main() {
 			showList(bot, upd.Message.Chat.ID)
 
 		case text == "/help":
-			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
-				"📚 Команды:\n"+
-					"/remind <время> <текст>\n"+
-					"Например: напомни через 5 сек пойти гулять\n"+
-					"📝 Напомни мне — подсказка\n"+
-					"📋 Список — активные напоминания"))
+			help := "📚 Команды:\n" +
+				"/remind <время> <текст>\n" +
+				"Например: напомни через 5 сек пойти гулять\n" +
+				"📝 Напомни мне — подсказка\n" +
+				"📋 Список — активные напоминания"
+			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, help))
 
 		default:
 			if dur, note, ok := parseAny(text); ok {
@@ -101,6 +104,7 @@ func main() {
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
 	at := time.Now().Add(d)
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
+
 	mu.Lock()
 	reminders = append(reminders, Reminder{ID: id, ChatID: chatID, Note: note, At: at})
 	mu.Unlock()
@@ -117,39 +121,40 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(reminders) == 0 {
-		bot.Send(tgbotapi.NewMessage(chatID, "📋 Нет активных напоминаний"))
-		return
-	}
+	var lines []string
+	var rows [][]tgbotapi.InlineKeyboardButton
 
 	for _, r := range reminders {
 		if r.ChatID != chatID {
 			continue
 		}
 		remaining := time.Until(r.At).Truncate(time.Second)
-		text := fmt.Sprintf("• %s (через %s)", r.Note, remaining)
-
-		// inline‑кнопка удаления
+		lines = append(lines, fmt.Sprintf("• %s (через %s)", r.Note, remaining))
 		btn := tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("❌ Удалить", r.ID),
 		)
-		msg := tgbotapi.NewMessage(chatID, text)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(btn)
-		bot.Send(msg)
+		rows = append(rows, btn)
 	}
+
+	if len(lines) == 0 {
+		bot.Send(tgbotapi.NewMessage(chatID, "📋 Нет активных напоминаний"))
+		return
+	}
+
+	msg := tgbotapi.NewMessage(chatID, "📋 Активные напоминания:\n"+strings.Join(lines, "\n"))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
+	bot.Send(msg)
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	// удаляем напоминание
 	removeByID(cq.Data)
 
-	// отвечаем на сам callback, чтобы кнопка “зависла” не висела
+	// ответ на callback, чтобы убрать "часики"
 	callback := tgbotapi.NewCallback(cq.ID, "Удалено")
 	if _, err := bot.Request(callback); err != nil {
-		log.Println("Ошибка AnswerCallbackQuery:", err)
+		log.Println("Ошибка ответа на callback:", err)
 	}
 
-	// опционально шлём в чат подтверждение
 	bot.Send(tgbotapi.NewMessage(cq.Message.Chat.ID, "✅ Напоминание удалено"))
 }
 
