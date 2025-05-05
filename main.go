@@ -48,6 +48,7 @@ func main() {
 	})
 	go http.ListenAndServe(":8081", nil)
 
+	// Меню с кнопкой "Повторять напоминания" внизу
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -143,11 +144,11 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 	})
 	mu.Unlock()
 
-	sendReminder(bot, chatID, note, id, repeat, d)
+	sendReminder(bot, chatID, note, id, repeat)
 }
 
-func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool, d time.Duration) {
-	interval := 1 * time.Minute
+func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool) {
+	interval := 5 * time.Minute
 	msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
 	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -163,11 +164,11 @@ func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bo
 	}
 	if repeat {
 		timers[id] = time.AfterFunc(interval, func() {
-			sendReminder(bot, chatID, note, id, repeat, d)
+			sendReminder(bot, chatID, note, id, repeat)
 		})
 	} else {
-		timers[id] = time.AfterFunc(d, func() {
-			// Если ещё не выполнено, но время прошло — удаляем
+		timers[id] = time.AfterFunc(time.Hour*24, func() {
+			// Удалить через день, если нет повтора и не выполнено
 			removeByID(id)
 		})
 	}
