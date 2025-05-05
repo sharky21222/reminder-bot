@@ -28,11 +28,10 @@ func main() {
 	})
 	go http.ListenAndServe(":8081", nil)
 
-	// клавиатура
+	// клавиатура только с кнопкой "📝 Напомни мне"
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
-			tgbotapi.NewKeyboardButton("📖 Помощь"),
 		),
 	)
 
@@ -46,39 +45,35 @@ func main() {
 		}
 		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
 
-		// любое сообщение сразу показывает меню
-		if text != "" {
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "📋 Меню:")
+		// Привет или /start → показываем меню
+		if text == "/start" || strings.Contains(text, "привет") {
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот‑напоминалка.")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
+			continue
 		}
 
-		// дальше обрабатываем специальные команды
 		switch {
-		case text == "/start":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "👋 Привет! Я бот-напоминалка.")
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
-
+		// кнопка "📝 Напомни мне"
 		case text == "📝 напомни мне":
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "✍ Введи, например: через 5 сек пойти гулять")
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "✍ Введи, например:\nчерез 5 сек пойти гулять")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-		case text == "/help" || text == "📖 помощь":
-			help := "📚 Команды:\n" +
-				"/remind <время> <текст>\n" +
-				"Например: через 5 сек пойти гулять\n" +
-				"/menu — показать меню"
-			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, help)
-			msg.ReplyMarkup = menu
-			bot.Send(msg)
+		// /help
+		case text == "/help":
+			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
+				"📚 Команды:\n"+
+					"/remind <время> <текст>\n"+
+					"Например: через 5 сек пойти гулять"))
 
+		// естественный ввод: "через N …"
 		case strings.HasPrefix(text, "через "):
 			if dur, note, ok := parseNatural(text); ok {
 				schedule(bot, upd.Message.Chat.ID, dur, note)
 			}
 
+		// /remind
 		case strings.HasPrefix(text, "/remind"):
 			parts := strings.SplitN(text, " ", 3)
 			if len(parts) >= 3 {
@@ -87,14 +82,13 @@ func main() {
 				}
 			}
 
-			// больше не отправляем "не понял" — меню уже показано
+			// любое другое — просто игнорируем (меню не показываем)
 		}
 	}
 }
 
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
-	confirm := tgbotapi.NewMessage(chatID, "⏳ Ок, напомню через "+d.String())
-	bot.Send(confirm)
+	bot.Send(tgbotapi.NewMessage(chatID, "⏳ Ок, напомню через "+d.String()))
 	go func() {
 		time.Sleep(d)
 		bot.Send(tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note))
