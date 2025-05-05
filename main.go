@@ -149,30 +149,42 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, 
 
 func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool) {
 	interval := 5 * time.Minute
-	msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
-	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", "done_"+id),
-		),
-	)
+	msgText := "🔔 Напоминание: " + note
+
+	var msg tgbotapi.MessageConfig
+	if repeat {
+		// Только если повтор включён — показываем кнопку "Выполнено"
+		msg = tgbotapi.NewMessage(chatID, msgText)
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", "done_"+id),
+			),
+		)
+	} else {
+		// Если повтор выключен — просто текстовое сообщение
+		msg = tgbotapi.NewMessage(chatID, msgText)
+	}
 
 	bot.Send(msg)
 
 	mu.Lock()
+	defer mu.Unlock()
+
 	if t, exists := timers[id]; exists {
 		t.Stop()
 	}
+
 	if repeat {
+		// Повторяем каждые 5 минут
 		timers[id] = time.AfterFunc(interval, func() {
 			sendReminder(bot, chatID, note, id, repeat)
 		})
 	} else {
-		timers[id] = time.AfterFunc(time.Hour*24, func() {
-			// Удалить через день, если нет повтора и не выполнено
+		// Удаляем через 1 минуту после первого уведомления
+		timers[id] = time.AfterFunc(time.Minute, func() {
 			removeByID(id)
 		})
 	}
-	mu.Unlock()
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
@@ -249,6 +261,9 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 }
 
 func removeByID(id string) {
+	mu.Lock()
+	defer mu.Lock()
+
 	for i, r := range reminders {
 		if r.ID == id {
 			reminders = append(reminders[:i], reminders[i+1:]...)
