@@ -4,7 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
+	"regexp"
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -21,69 +21,73 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Health-check
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	})
 	go http.ListenAndServe(":8081", nil)
 
+	// Кнопки
+	menu := tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("/start"),
+			tgbotapi.NewKeyboardButton("/help"),
+		),
+	)
+
+	// Обработка команд
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	updates := bot.GetUpdatesChan(u)
 
-	for upd := range updates {
-		if upd.Message != nil {
-			msgText := upd.Message.Text
+	re := regexp.MustCompile(`(?i)напомни.*через (\d+[smhd]) (.+)`)
 
-			switch {
-			case msgText == "/start":
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Привет! Я бот-напоминалка. Напиши /help"))
-			case msgText == "/help":
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Команды:\n/remind 10s что-то сделать\n/time — текущее время\n/menu — кнопки"))
-			case msgText == "/time":
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "⏰ Сейчас "+time.Now().Format("15:04:05")))
-			case strings.HasPrefix(msgText, "/remind"):
-				parts := strings.SplitN(msgText, " ", 3)
-				if len(parts) < 3 {
-					bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Формат: /remind 10s текст"))
-					continue
-				}
-				d, err := time.ParseDuration(parts[1])
-				if err != nil {
-					bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Время должно быть как 10s, 5m, 1h"))
-					continue
-				}
-				msg := parts[2]
-				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Ок, напомню через "+parts[1]))
-				go func(id int64, delay time.Duration, text string) {
-					time.Sleep(delay)
-					bot.Send(tgbotapi.NewMessage(id, "🔔 Напоминание: "+text))
-				}(upd.Message.Chat.ID, d, msg)
-			case msgText == "/menu":
-				msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Выберите опцию:")
-				msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-					tgbotapi.NewInlineKeyboardRow(
-						tgbotapi.NewInlineKeyboardButtonData("🕒 Время", "time"),
-						tgbotapi.NewInlineKeyboardButtonData("❓ Помощь", "help"),
-						tgbotapi.NewInlineKeyboardButtonData("🔐 Секрет", "secret"),
-					),
-				)
-				bot.Send(msg)
-			}
+	for upd := range updates {
+		if upd.Message == nil {
+			continue
 		}
 
-		if upd.CallbackQuery != nil {
-			var response string
-			switch upd.CallbackQuery.Data {
-			case "time":
-				response = "⏰ Сейчас " + time.Now().Format("15:04:05")
-			case "help":
-				response = "Напиши: /remind 10s что-то сделать"
-			case "secret":
-				response = "🔐 Секрет: ты крутой!"
+		msgText := upd.Message.Text
+
+		// /start
+		if msgText == "/start" {
+			msg := tgbotapi.NewMessage(upd.Message.Chat.ID, "Привет! Я помогу тебе с напоминаниями.")
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
+			continue
+		}
+
+		// /help
+		if msgText == "/help" {
+			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID,
+				`Напиши сообщение вроде:
+"напомни мне через 10s сделать зарядку"
+"напомни через 5m позвонить другу"`))
+			continue
+		}
+
+		// Обработка естественного запроса
+		matches := re.FindStringSubmatch(msgText)
+		if len(matches) == 3 {
+			durationStr := matches[1]
+			note := matches[2]
+
+			d, err := time.ParseDuration(durationStr)
+			if err != nil {
+				bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Ошибка формата времени (пример: 10s, 5m, 1h)"))
+				continue
 			}
-			bot.Send(tgbotapi.NewMessage(upd.CallbackQuery.Message.Chat.ID, response))
-			bot.Request(tgbotapi.NewCallback(upd.CallbackQuery.ID, ""))
+
+			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Ок, напомню через "+durationStr))
+
+			go func(id int64, delay time.Duration, msg string) {
+				time.Sleep(delay)
+				bot.Send(tgbotapi.NewMessage(id, "🔔 Напоминание: "+msg))
+			}(upd.Message.Chat.ID, d, note)
+
+		} else {
+			bot.Send(tgbotapi.NewMessage(upd.Message.Chat.ID, "Не понял. Нажми /help для примера"))
 		}
 	}
 }
