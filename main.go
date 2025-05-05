@@ -20,15 +20,17 @@ type Reminder struct {
 	Note     string
 	At       time.Time
 	Category string
+	Repeat   bool // флаг для повторения
 }
 
 var (
-	re          = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
-	wordRe      = regexp.MustCompile(`\p{L}+`)
-	reminders   = make([]Reminder, 0)
-	timers      = make(map[string]*time.Timer)
-	pendingNote = make(map[int64]string)
-	mu          sync.Mutex
+	re             = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
+	wordRe         = regexp.MustCompile(`\p{L}+`)
+	reminders      = make([]Reminder, 0)
+	timers         = make(map[string]*time.Timer)
+	pendingNote    = make(map[int64]string)
+	repeatSettings = make(map[int64]bool) // хранение настроек повтора
+	mu             sync.Mutex
 )
 
 func main() {
@@ -49,6 +51,9 @@ func main() {
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
+			tgbotapi.NewKeyboardButton("🔁 Повторять напоминания"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📋 Список"),
 		),
 	)
@@ -73,7 +78,7 @@ func main() {
 				d, err := time.ParseDuration(m[1] + unitSuffix(m[2]))
 				if err == nil {
 					delete(pendingNote, chatID)
-					schedule(bot, chatID, d, note)
+					schedule(bot, chatID, d, note, repeatSettings[chatID])
 					continue
 				}
 			}
@@ -90,6 +95,17 @@ func main() {
 		case text == "📝 напомни мне":
 			bot.Send(tgbotapi.NewMessage(chatID, "✍ Что напомнить?"))
 
+		case text == "🔁 повторять напоминания":
+			mu.Lock()
+			current := repeatSettings[chatID]
+			repeatSettings[chatID] = !current
+			mu.Unlock()
+			status := "включены"
+			if !repeatSettings[chatID] {
+				status = "выключены"
+			}
+			bot.Send(tgbotapi.NewMessage(chatID, fmt.Sprintf("🔄 Повторяющиеся напоминания теперь %s.", status)))
+
 		case text == "📋 список":
 			showList(bot, chatID)
 
@@ -98,6 +114,7 @@ func main() {
 				"📚 Просто напиши, что напомнить, и бот спросит “Через сколько?”\n"+
 					"Или используй кнопки:\n"+
 					"📝 Напомни мне — начать напоминание\n"+
+					"🔁 Повторять напоминания — вкл/выкл повтор\n"+
 					"📋 Список — активные напоминания"))
 
 		default:
@@ -108,26 +125,51 @@ func main() {
 	}
 }
 
-func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
+func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string, repeat bool) {
 	at := time.Now().Add(d)
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
 	category := classify(note)
 
 	mu.Lock()
-	reminders = append(reminders, Reminder{ID: id, ChatID: chatID, Note: note, At: at, Category: category})
-	timers[id] = time.AfterFunc(d, func() {
-		msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", "done_"+id),
-			),
-		)
-		bot.Send(msg)
+	reminders = append(reminders, Reminder{
+		ID:       id,
+		ChatID:   chatID,
+		Note:     note,
+		At:       at,
+		Category: category,
+		Repeat:   repeat,
 	})
 	mu.Unlock()
 
-	bot.Send(tgbotapi.NewMessage(chatID,
-		fmt.Sprintf("✅ Запомнил! Напомню через %s (Категория: %s)", d.String(), category)))
+	sendReminder(bot, chatID, note, id, repeat, d)
+}
+
+func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool, d time.Duration) {
+	interval := 5 * time.Minute
+	msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", "done_"+id),
+		),
+	)
+
+	bot.Send(msg)
+
+	mu.Lock()
+	if t, exists := timers[id]; exists {
+		t.Stop()
+	}
+	if repeat {
+		timers[id] = time.AfterFunc(interval, func() {
+			sendReminder(bot, chatID, note, id, repeat, d)
+		})
+	} else {
+		timers[id] = time.AfterFunc(d, func() {
+			// Если ещё не выполнено, но время прошло — удаляем
+			removeByID(id)
+		})
+	}
+	mu.Unlock()
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
