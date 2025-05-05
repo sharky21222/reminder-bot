@@ -51,10 +51,12 @@ func main() {
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
-			tgbotapi.NewKeyboardButton("🔁 Повторять напоминания"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📋 Список"),
+		),
+		tgbotapi.NewKeyboardButtonRow(
+			tgbotapi.NewKeyboardButton("🔁 Повторять напоминания"),
 		),
 	)
 
