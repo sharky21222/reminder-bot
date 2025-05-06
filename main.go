@@ -308,28 +308,8 @@ func parseTime(input string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("не распознал формат времени")
 }
 
-func showListIfNotEmpty(bot *tgbotapi.BotAPI, chatID int64) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	var hasReminders bool
-	for _, r := range reminders {
-		if r.ChatID == chatID {
-			hasReminders = true
-			break
-		}
-	}
-
-	if hasReminders {
-		showList(bot, chatID)
-	} else {
-		bot.Send(tgbotapi.NewMessage(chatID, "📋 Все напоминания удалены."))
-	}
-}
-
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	id := cq.Data
-	chatID := cq.Message.Chat.ID
 
 	mu.Lock()
 	if t, ok := timers[id]; ok {
@@ -339,16 +319,8 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	removeByID(id)
 	mu.Unlock()
 
-	// Отправляем всплывающее уведомление о выполнении
 	callback := tgbotapi.NewCallback(cq.ID, "✅ Выполнено")
 	bot.Request(callback)
-
-	// Удаляем сообщение с кнопкой "❌ Удалить"
-	deleteMsg := tgbotapi.NewDeleteMessage(chatID, cq.Message.MessageID)
-	bot.Send(deleteMsg)
-
-	// Показываем обновлённый список только если есть оставшиеся напоминания
-	showListIfNotEmpty(bot, chatID)
 }
 
 func removeByID(id string) {
