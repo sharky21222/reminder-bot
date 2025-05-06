@@ -100,9 +100,13 @@ func main() {
 
 		chatID := upd.Message.Chat.ID
 		text := strings.TrimSpace(upd.Message.Text)
+		lower := strings.ToLower(text)
 
-		switch strings.ToLower(text) {
+		switch lower {
 		case "/start", "привет":
+			// 1) сбрасываем ожидание времени
+			delete(pendingNote, chatID)
+
 			msg := tgbotapi.NewMessage(chatID,
 				"👋 Привет! Напиши «что когда», например:\n"+
 					" • «через 5 мин кофеить»\n"+
@@ -111,6 +115,9 @@ func main() {
 			bot.Send(msg)
 
 		case "📝 напомни мне":
+			// 1) тоже сброс
+			delete(pendingNote, chatID)
+
 			bot.Send(tgbotapi.NewMessage(chatID, "✍ Напиши текст + время вместе:"))
 
 		case "📋 список":
@@ -129,6 +136,9 @@ func main() {
 			bot.Send(tgbotapi.NewMessage(chatID, "🔖 Введи свою категорию:"))
 
 		case "/help":
+			// 1) сброс, если где-то застыло ожидание
+			delete(pendingNote, chatID)
+
 			bot.Send(tgbotapi.NewMessage(chatID,
 				"📚 Инструкция:\n"+
 					" • Просто напиши «что когда» в одном сообщении\n"+
@@ -136,20 +146,25 @@ func main() {
 					" • 📋 Список — показать напоминания\n"+
 					" • 🔁 Повтор вкл/выкл — включить/выключить повтор\n"+
 					" • 🏷️ Категория — задать свою"))
+
 		default:
-			// установка категории
+			// если пользователь вводит новую категорию
 			if userCats[chatID] == "pending" {
 				userCats[chatID] = text
 				bot.Send(tgbotapi.NewMessage(chatID, "✅ Категория: "+text))
 				continue
 			}
-			// полный парсинг одного сообщения
+
+			// 2) пробуем распознать всё сразу: абсолютку, завтра, через
 			if at, note, ok := parseInput(text); ok {
+				// обязательно сбрасываем pendingNote
+				delete(pendingNote, chatID)
 				schedule(bot, chatID, time.Until(at), note)
 				continue
 			}
-			// ждём время от предыдущего шага
-			if note, ok := pendingNote[chatID]; ok {
+
+			// 3) если у нас уже было текстовое напоминание — ждём времени
+			if note, waiting := pendingNote[chatID]; waiting {
 				if m := reRel.FindStringSubmatch(text); len(m) == 3 {
 					if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
 						delete(pendingNote, chatID)
@@ -161,7 +176,8 @@ func main() {
 					"⛔ Время неверно. Пример: 10s, 5m, 1h"))
 				continue
 			}
-			// начинаем диалог
+
+			// 4) начинаем диалог: запоминаем текст и спрашиваем «через сколько»
 			pendingNote[chatID] = text
 			bot.Send(tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить?"))
 		}
