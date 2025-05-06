@@ -230,6 +230,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	})
 	mu.Unlock()
 
+	// таймер для самого напоминания + inline-кнопка «✅ Выполнено» при повторе
 	timer := time.AfterFunc(d, func() {
 		msg := tgbotapi.NewMessage(chatID, "🔔 "+note)
 		if rep {
@@ -240,8 +241,9 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 			)
 		}
 		bot.Send(msg)
+
+		// если включён повтор — через минуту ещё раз, пока пользователь не нажмёт «Выполнено»
 		if rep {
-			// повтор через минуту
 			timers[id] = time.AfterFunc(1*time.Minute, func() {
 				if stillExists(id) {
 					bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор: "+note))
@@ -251,8 +253,8 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	})
 	timers[id] = timer
 
-	bot.Send(tgbotapi.NewMessage(chatID,
-		fmt.Sprintf("✅ Запомню через %s (Категория: %s)", d.String(), cat)))
+	// вот здесь убираем долгий вывод d.String() и просто сообщаем, что напомним
+	bot.Send(tgbotapi.NewMessage(chatID, "✅ Запомню!"))
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
