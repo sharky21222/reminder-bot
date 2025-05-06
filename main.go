@@ -90,13 +90,13 @@ func main() {
 				"📚 Напиши что напомнить — бот спросит через сколько.\n"+
 					"📝 Напомни мне — диалог\n📋 Список — напоминания\n🔁 Повтор — включить/выключить повтор"))
 
-		case "🔁 повтор включен":
+		case "🔁 повтор включён":
 			repeatFlag[chatID] = true
-			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор включён"))
+			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор напоминаний включён"))
 
 		case "🔁 повтор выключен":
 			repeatFlag[chatID] = false
-			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор выключен"))
+			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор напоминаний выключен"))
 
 		default:
 			if note, ok := pendingNote[chatID]; ok {
@@ -135,22 +135,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	mu.Unlock()
 
 	timer := time.AfterFunc(d, func() {
-		msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
-		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
-			tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", id),
-			),
-		)
-		bot.Send(msg)
-
-		if repeat {
-			// повтор через 1 минуту, если не выполнено
-			timers[id] = time.AfterFunc(1*time.Minute, func() {
-				if stillExists(id) {
-					bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор: "+note))
-				}
-			})
-		}
+		sendReminder(bot, chatID, note, id, repeat)
 	})
 	timers[id] = timer
 
@@ -158,15 +143,31 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 		fmt.Sprintf("✅ Запомнил! Напомню через %s (Категория: %s)", d.String(), category)))
 }
 
-func stillExists(id string) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	for _, r := range reminders {
-		if r.ID == id {
-			return true
-		}
+func sendReminder(bot *tgbotapi.BotAPI, chatID int64, note, id string, repeat bool) {
+	msg := tgbotapi.NewMessage(chatID, "🔔 Напоминание: "+note)
+
+	if repeat {
+		msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", id),
+			),
+		)
+		// повтор через 1 минуту, если не нажал выполнено
+		mu.Lock()
+		timers[id] = time.AfterFunc(1*time.Minute, func() {
+			if stillExists(id) {
+				sendReminder(bot, chatID, note, id, repeat)
+			}
+		})
+		mu.Unlock()
+	} else {
+		mu.Lock()
+		delete(timers, id)
+		removeByID(id)
+		mu.Unlock()
 	}
-	return false
+
+	bot.Send(msg)
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
@@ -216,6 +217,17 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 
 	callback := tgbotapi.NewCallback(cq.ID, "✅ Выполнено")
 	bot.Request(callback)
+}
+
+func stillExists(id string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, r := range reminders {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func removeByID(id string) {
