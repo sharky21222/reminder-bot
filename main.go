@@ -90,96 +90,35 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	for upd := range updates {
-		if upd.CallbackQuery != nil {
-			handleCallback(bot, upd.CallbackQuery)
-			continue
-		}
 		if upd.Message == nil {
 			continue
 		}
-
 		chatID := upd.Message.Chat.ID
-		text := strings.TrimSpace(upd.Message.Text)
-		lower := strings.ToLower(text)
+		text := strings.ToLower(strings.TrimSpace(upd.Message.Text))
 
-		switch lower {
+		switch text {
 		case "/start", "привет":
-			// 1) сбрасываем ожидание времени
-			delete(pendingNote, chatID)
-
 			msg := tgbotapi.NewMessage(chatID,
 				"👋 Привет! Напиши «что когда», например:\n"+
 					" • «через 5 мин кофеить»\n"+
 					" • «10 мая в 14:00 сходить в аптеку»")
+			// вот здесь используем menu
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-		case "📝 напомни мне":
-			// 1) тоже сброс
-			delete(pendingNote, chatID)
-
-			bot.Send(tgbotapi.NewMessage(chatID, "✍ Напиши текст + время вместе:"))
-
-		case "📋 список":
-			showList(bot, chatID)
-
-		case "🔁 повтор вкл":
-			repeatFlag[chatID] = true
-			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор включён"))
-
-		case "🔁 повтор выкл":
-			repeatFlag[chatID] = false
-			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор выключен"))
-
-		case "🏷️ установить категорию":
-			userCats[chatID] = "pending"
-			bot.Send(tgbotapi.NewMessage(chatID, "🔖 Введи свою категорию:"))
-
 		case "/help":
-			// 1) сброс, если где-то застыло ожидание
-			delete(pendingNote, chatID)
-
-			bot.Send(tgbotapi.NewMessage(chatID,
+			msg := tgbotapi.NewMessage(chatID,
 				"📚 Инструкция:\n"+
 					" • Просто напиши «что когда» в одном сообщении\n"+
 					" • 📝 Напомни мне — начать диалог\n"+
 					" • 📋 Список — показать напоминания\n"+
 					" • 🔁 Повтор вкл/выкл — включить/выключить повтор\n"+
-					" • 🏷️ Категория — задать свою"))
+					" • 🏷️ Категория — задать свою")
+			// и здесь тоже можно добавить клавиатуру
+			msg.ReplyMarkup = menu
+			bot.Send(msg)
 
-		default:
-			// если пользователь вводит новую категорию
-			if userCats[chatID] == "pending" {
-				userCats[chatID] = text
-				bot.Send(tgbotapi.NewMessage(chatID, "✅ Категория: "+text))
-				continue
-			}
-
-			// 2) пробуем распознать всё сразу: абсолютку, завтра, через
-			if at, note, ok := parseInput(text); ok {
-				// обязательно сбрасываем pendingNote
-				delete(pendingNote, chatID)
-				schedule(bot, chatID, time.Until(at), note)
-				continue
-			}
-
-			// 3) если у нас уже было текстовое напоминание — ждём времени
-			if note, waiting := pendingNote[chatID]; waiting {
-				if m := reRel.FindStringSubmatch(text); len(m) == 3 {
-					if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
-						delete(pendingNote, chatID)
-						schedule(bot, chatID, d, note)
-						continue
-					}
-				}
-				bot.Send(tgbotapi.NewMessage(chatID,
-					"⛔ Время неверно. Пример: 10s, 5m, 1h"))
-				continue
-			}
-
-			// 4) начинаем диалог: запоминаем текст и спрашиваем «через сколько»
-			pendingNote[chatID] = text
-			bot.Send(tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить?"))
+			// … остальные case …
 		}
 	}
 }
