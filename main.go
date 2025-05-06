@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,13 +26,14 @@ type Reminder struct {
 
 var (
 	re          = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
+	wordRe      = regexp.MustCompile(`\p{L}+`)
 	dateTimeRe  = regexp.MustCompile(`(?i)(?:в|через)\s+(\d+:\d+|\d+\s+(?:минут[ауы]?|час[аов]?|секунд[ы]?))`)
 	dayRe       = regexp.MustCompile(`(?i)(завтра|послезавтра|(\d{1,2})\s*числа)`)
 	reminders   = make([]Reminder, 0)
 	timers      = make(map[string]*time.Timer)
 	pendingNote = make(map[int64]string)
 	repeatFlag  = make(map[int64]bool)
-	categoryMap = make(map[int64]string)
+	categoryMap = make(map[int64]string) // для временного хранения категории
 	mu          sync.Mutex
 )
 
@@ -100,7 +102,7 @@ func main() {
 				"📚 Напиши что напомнить — бот спросит через сколько.\n"+
 					"📝 Напомни мне — диалог\n📋 Список — напоминания\n🔁 Повтор — включить/выключить повтор"))
 
-		case "🔁 Повтор включён":
+		case "🔁 Повтор включен":
 			repeatFlag[chatID] = true
 			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор включён"))
 
@@ -109,12 +111,14 @@ func main() {
 			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор выключен"))
 
 		default:
+			// Обработка команды /category
 			if strings.HasPrefix(text, "/category ") {
 				cat := strings.TrimSpace(strings.TrimPrefix(text, "/category "))
 				linkCategory(bot, chatID, cat)
 				continue
 			}
 
+			// Если ожидаем категорию
 			if categoryMap[chatID] == "waiting" {
 				linkCategory(bot, chatID, text)
 				continue
@@ -152,6 +156,17 @@ func linkCategory(bot *tgbotapi.BotAPI, chatID int64, cat string) {
 	}
 	bot.Send(tgbotapi.NewMessage(chatID, "❌ Нет напоминаний для привязки категории."))
 	delete(categoryMap, chatID)
+}
+
+func stillExists(id string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, r := range reminders {
+		if r.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func schedule(bot *tgbotapi.BotAPI, chatID int64, at time.Time, note string) {
@@ -295,8 +310,6 @@ func parseTime(input string) (time.Time, error) {
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 	id := cq.Data
-	chatID := cq.Message.Chat.ID
-	messageID := cq.Message.MessageID
 
 	mu.Lock()
 	if t, ok := timers[id]; ok {
@@ -308,50 +321,15 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 
 	callback := tgbotapi.NewCallback(cq.ID, "✅ Выполнено")
 	bot.Request(callback)
-
-	showUpdatedList(bot, chatID, messageID)
 }
 
-func showUpdatedList(bot *tgbotapi.BotAPI, chatID int64, messageID int) {
-	mu.Lock()
-	defer mu.Unlock()
-
-	grouped := map[string][]Reminder{}
-	for _, r := range reminders {
-		if r.ChatID == chatID {
-			grouped[r.Category] = append(grouped[r.Category], r)
+func removeByID(id string) {
+	for i, r := range reminders {
+		if r.ID == id {
+			reminders = append(reminders[:i], reminders[i+1:]...)
+			break
 		}
 	}
-
-	var text strings.Builder
-	var rows [][]tgbotapi.InlineKeyboardButton
-
-	if len(grouped) == 0 {
-		msg := tgbotapi.NewEditMessageText(chatID, messageID, "📋 Нет активных напоминаний")
-		bot.Send(msg)
-		return
-	}
-
-	for cat, items := range grouped {
-		text.WriteString(fmt.Sprintf("🔖 *%s*:\n", cat))
-		for _, r := range items {
-			text.WriteString(fmt.Sprintf("• %s (через %s)\n", r.Note, time.Until(r.At).Truncate(time.Second)))
-			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-				tgbotapi.NewInlineKeyboardButtonData("❌ Удалить", r.ID),
-			))
-		}
-		text.WriteString("\n")
-	}
-
-	msg := tgbotapi.NewEditMessageTextAndMarkup(
-		chatID,
-		messageID,
-		text.String(),
-		tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}, // <-- Правильно: без &
-	)
-	msg.ParseMode = tgbotapi.ModeMarkdown
-
-	bot.Send(msg)
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
@@ -370,11 +348,18 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
+	var keys []string
+	for k := range grouped {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
 	var text strings.Builder
-	for cat, items := range grouped {
+	for _, cat := range keys {
+		items := grouped[cat]
 		text.WriteString(fmt.Sprintf("🔖 *%s*:\n", cat))
 		for _, r := range items {
-			text.WriteString(fmt.Sprintf("• %s (через %s)\n", r.Note, time.Until(r.At).Truncate(time.Second)))
+			text.WriteString(fmt.Sprintf("• %s (%s)\n", r.Note, r.At.Format("02.01 15:04")))
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData("❌ Удалить", r.ID),
 			))
@@ -382,30 +367,10 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 		text.WriteString("\n")
 	}
 
-	// Создаём клавиатуру напрямую
 	msg := tgbotapi.NewMessage(chatID, text.String())
-	msg.ParseMode = tgbotapi.ModeMarkdown
-	msg.ReplyMarkup = tgbotapi.InlineKeyboardMarkup{InlineKeyboard: rows}
+	msg.ParseMode = "Markdown"
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(rows...)
 	bot.Send(msg)
-}
-func removeByID(id string) {
-	for i, r := range reminders {
-		if r.ID == id {
-			reminders = append(reminders[:i], reminders[i+1:]...)
-			break
-		}
-	}
-}
-
-func stillExists(id string) bool {
-	mu.Lock()
-	defer mu.Unlock()
-	for _, r := range reminders {
-		if r.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func classify(text string) string {
@@ -422,13 +387,10 @@ func classify(text string) string {
 }
 
 func containsRoot(text string, roots ...string) bool {
-	words := strings.FieldsFunc(text, func(r rune) bool {
-		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= 'а' && r <= 'я') || (r >= 'А' && r <= 'Я'))
-	})
+	words := wordRe.FindAllString(strings.ToLower(text), -1)
 	for _, w := range words {
-		lw := strings.ToLower(w)
 		for _, root := range roots {
-			if strings.HasPrefix(lw, root) || strings.HasPrefix(root, lw) {
+			if strings.HasPrefix(w, root) || strings.HasPrefix(root, w) {
 				return true
 			}
 		}
