@@ -24,9 +24,9 @@ type Reminder struct {
 }
 
 var (
-	// «через 5 сек», «10m», «1h»…
+	// относительное «через 5 сек», «10m», «1h»…
 	reRel = regexp.MustCompile(`(?i)(?:через\s*)?(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
-	// «10 мая в 14:00 заметка»
+	// абсолютная «10 мая в 14:00 заметка»
 	reAbs = regexp.MustCompile(`(?i)^(?:напомни(?:\s+мне)?\s*)?(\d{1,2})\s*(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s*(?:в\s*)?(\d{1,2}):(\d{2})\s+(.+)$`)
 	// «завтра в 5:30 сделать…»
 	reTomorrow = regexp.MustCompile(`(?i)^(?:напомни(?:\s+мне)?\s*)?завтра(?:\s*в\s*(\d{1,2})(?::|\.)(\d{2}))?\s+(.+)$`)
@@ -46,9 +46,9 @@ var (
 		"декабря":  time.December,
 	}
 
-	repeatFlag  = make(map[int64]bool)
-	userCats    = make(map[int64]string)
-	pendingNote = make(map[int64]string)
+	repeatFlag  = make(map[int64]bool)   // флаг повторных напоминаний
+	userCats    = make(map[int64]string) // пользовательские категории
+	pendingNote = make(map[int64]string) // чат→текст, ожидающий времени
 
 	reminders = make([]Reminder, 0)
 	timers    = make(map[string]*time.Timer)
@@ -71,6 +71,7 @@ func main() {
 	})
 	go http.ListenAndServe(":8081", nil)
 
+	// клавиатура
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
@@ -90,43 +91,90 @@ func main() {
 	updates := bot.GetUpdatesChan(u)
 
 	for upd := range updates {
+		// inline-кнопки «✅ Выполнено» / «❌ Удалить»
+		if upd.CallbackQuery != nil {
+			handleCallback(bot, upd.CallbackQuery)
+			continue
+		}
 		if upd.Message == nil {
 			continue
 		}
-		chatID := upd.Message.Chat.ID
-		text := strings.ToLower(strings.TrimSpace(upd.Message.Text))
 
-		switch text {
+		chatID := upd.Message.Chat.ID
+		text := strings.TrimSpace(upd.Message.Text)
+
+		switch strings.ToLower(text) {
 		case "/start", "привет":
 			msg := tgbotapi.NewMessage(chatID,
-				"👋 Привет! Напиши «что когда», например:\n"+
+				"👋 Привет! Напиши «что когда» в одном сообщении, например:\n"+
 					" • «через 5 мин кофеить»\n"+
 					" • «10 мая в 14:00 сходить в аптеку»")
-			// вот здесь используем menu
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
+
+		case "📝 напомни мне":
+			bot.Send(tgbotapi.NewMessage(chatID, "✍ Напиши текст + время вместе, например «через 3 сек попить воды»"))
+
+		case "📋 список":
+			showList(bot, chatID)
+
+		case "🔁 повтор вкл":
+			repeatFlag[chatID] = true
+			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор включён"))
+
+		case "🔁 повтор выкл":
+			repeatFlag[chatID] = false
+			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор выключен"))
+
+		case "🏷️ установить категорию":
+			userCats[chatID] = "pending"
+			bot.Send(tgbotapi.NewMessage(chatID, "🔖 Введи свою категорию:"))
 
 		case "/help":
 			msg := tgbotapi.NewMessage(chatID,
 				"📚 Инструкция:\n"+
 					" • Просто напиши «что когда» в одном сообщении\n"+
 					" • 📝 Напомни мне — начать диалог\n"+
-					" • 📋 Список — показать напоминания\n"+
-					" • 🔁 Повтор вкл/выкл — включить/выключить повтор\n"+
+					" • 📋 Список — показать активные напоминания\n"+
+					" • 🔁 Повтор вкл/выкл — вкл/выкл повтор\n"+
 					" • 🏷️ Категория — задать свою")
-			// и здесь тоже можно добавить клавиатуру
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
-			// … остальные case …
+		default:
+			// если пользователь вводит категорию вручную
+			if userCats[chatID] == "pending" {
+				userCats[chatID] = text
+				bot.Send(tgbotapi.NewMessage(chatID, "✅ Категория установлена: "+text))
+				continue
+			}
+			// сразу весь текст «что когда»
+			if at, note, ok := parseInput(text); ok {
+				schedule(bot, chatID, at.Sub(time.Now()), note)
+				continue
+			}
+			// продолжаем диалог: сначала текст напоминания…
+			if note, ok := pendingNote[chatID]; ok {
+				if m := reRel.FindStringSubmatch(text); len(m) == 3 {
+					if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
+						delete(pendingNote, chatID)
+						schedule(bot, chatID, d, note)
+						continue
+					}
+				}
+				bot.Send(tgbotapi.NewMessage(chatID, "⛔ Неверный формат времени. Пример: 10s, 5m, 1h"))
+				continue
+			}
+			// первый шаг диалога: запоминаем текст, спрашиваем «через сколько»
+			pendingNote[chatID] = text
+			bot.Send(tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить?"))
 		}
 	}
 }
 
-// пробуем парсить сразу «абсолютные» / «завтра» / «через»
+// парсим сразу «абсолютные» / «завтра» / «через»
 func parseInput(text string) (time.Time, string, bool) {
 	now := time.Now()
-
 	// 1) абсолютная дата
 	if m := reAbs.FindStringSubmatch(text); len(m) == 6 {
 		day := toInt(m[1])
@@ -142,8 +190,7 @@ func parseInput(text string) (time.Time, string, bool) {
 	}
 	// 2) завтра
 	if m := reTomorrow.FindStringSubmatch(text); len(m) == 4 {
-		h := 9
-		min := 0
+		h, min := 9, 0
 		if m[1] != "" {
 			h = toInt(m[1])
 			if m[2] != "" {
@@ -157,7 +204,6 @@ func parseInput(text string) (time.Time, string, bool) {
 	// 3) через
 	if m := reRel.FindStringSubmatch(text); len(m) == 3 {
 		if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
-			// вырезаем «через X» из текста
 			note := reRel.ReplaceAllString(text, "")
 			return now.Add(d), strings.TrimSpace(note), true
 		}
@@ -168,9 +214,9 @@ func parseInput(text string) (time.Time, string, bool) {
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
 	at := time.Now().Add(d)
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
-	cat := classify(note)
-	if c := userCats[chatID]; c != "" {
-		cat = c
+	category := classify(note)
+	if custom := userCats[chatID]; custom != "" {
+		category = custom
 	}
 	rep := repeatFlag[chatID]
 
@@ -180,12 +226,12 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 		ChatID:     chatID,
 		Note:       note,
 		At:         at,
-		Category:   cat,
+		Category:   category,
 		NeedRepeat: rep,
 	})
 	mu.Unlock()
 
-	// таймер для самого напоминания + inline-кнопка «✅ Выполнено» при повторе
+	// уведомление
 	timer := time.AfterFunc(d, func() {
 		msg := tgbotapi.NewMessage(chatID, "🔔 "+note)
 		if rep {
@@ -196,8 +242,7 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 			)
 		}
 		bot.Send(msg)
-
-		// если включён повтор — через минуту ещё раз, пока пользователь не нажмёт «Выполнено»
+		// если включён повтор — через минуту, пока не нажмёт «Выполнено»
 		if rep {
 			timers[id] = time.AfterFunc(1*time.Minute, func() {
 				if stillExists(id) {
@@ -208,20 +253,19 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	})
 	timers[id] = timer
 
-	// вот здесь убираем долгий вывод d.String() и просто сообщаем, что напомним
 	bot.Send(tgbotapi.NewMessage(chatID, "✅ Запомню!"))
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	mu.Lock()
 	defer mu.Unlock()
-	g := map[string][]Reminder{}
+	groups := map[string][]Reminder{}
 	for _, r := range reminders {
 		if r.ChatID == chatID {
-			g[r.Category] = append(g[r.Category], r)
+			groups[r.Category] = append(groups[r.Category], r)
 		}
 	}
-	if len(g) == 0 {
+	if len(groups) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "📋 Нет напоминаний"))
 		return
 	}
@@ -229,7 +273,7 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	var rows [][]tgbotapi.InlineKeyboardButton
 	var sb strings.Builder
 	sb.WriteString("📋 *Список*:\n\n")
-	for cat, items := range g {
+	for cat, items := range groups {
 		sb.WriteString(fmt.Sprintf("🔖 *%s*:\n", cat))
 		for _, r := range items {
 			rem := time.Until(r.At).Truncate(time.Second)
@@ -248,7 +292,7 @@ func showList(bot *tgbotapi.BotAPI, chatID int64) {
 }
 
 func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
-	bot.Request(tgbotapi.NewCallback(cq.ID, ""))
+	bot.Request(tgbotapi.NewCallback(cq.ID, "")) // отметка Telegram
 	data := cq.Data
 	chatID := cq.Message.Chat.ID
 
@@ -265,6 +309,7 @@ func handleCallback(bot *tgbotapi.BotAPI, cq *tgbotapi.CallbackQuery) {
 		return
 	}
 
+	// удаление
 	mu.Lock()
 	if t, ok := timers[data]; ok {
 		t.Stop()
