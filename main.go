@@ -6,11 +6,11 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/araddon/dateparse"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -24,14 +24,35 @@ type Reminder struct {
 }
 
 var (
-	re          = regexp.MustCompile(`(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
-	wordRe      = regexp.MustCompile(`\p{L}+`)
-	reminders   = make([]Reminder, 0)
-	timers      = make(map[string]*time.Timer)
-	pendingNote = make(map[int64]string)
+	// «через 5 сек», «10m», «1h»…
+	reRel = regexp.MustCompile(`(?i)(?:через\s*)?(\d+)\s*(секунд[ы]?|сек|с|минут[ы]?|мин|m|час[аов]?|ч|h)`)
+	// «10 мая в 14:00 заметка»
+	reAbs = regexp.MustCompile(`(?i)^(?:напомни(?:\s+мне)?\s*)?(\d{1,2})\s*(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s*(?:в\s*)?(\d{1,2}):(\d{2})\s+(.+)$`)
+	// «завтра в 5:30 сделать…»
+	reTomorrow = regexp.MustCompile(`(?i)^(?:напомни(?:\s+мне)?\s*)?завтра(?:\s*в\s*(\d{1,2})(?::|\.)(\d{2}))?\s+(.+)$`)
+
+	monthMap = map[string]time.Month{
+		"января":   time.January,
+		"февраля":  time.February,
+		"марта":    time.March,
+		"апреля":   time.April,
+		"мая":      time.May,
+		"июня":     time.June,
+		"июля":     time.July,
+		"августа":  time.August,
+		"сентября": time.September,
+		"октября":  time.October,
+		"ноября":   time.November,
+		"декабря":  time.December,
+	}
+
 	repeatFlag  = make(map[int64]bool)
 	userCats    = make(map[int64]string)
-	mu          sync.Mutex
+	pendingNote = make(map[int64]string)
+
+	reminders = make([]Reminder, 0)
+	timers    = make(map[string]*time.Timer)
+	mu        sync.Mutex
 )
 
 func main() {
@@ -50,15 +71,14 @@ func main() {
 	})
 	go http.ListenAndServe(":8081", nil)
 
-	// Главное меню
 	menu := tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("📝 Напомни мне"),
 			tgbotapi.NewKeyboardButton("📋 Список"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
-			tgbotapi.NewKeyboardButton("🔁 Повтор включён"),
-			tgbotapi.NewKeyboardButton("🔁 Повтор выключен"),
+			tgbotapi.NewKeyboardButton("🔁 Повтор вкл"),
+			tgbotapi.NewKeyboardButton("🔁 Повтор выкл"),
 		),
 		tgbotapi.NewKeyboardButtonRow(
 			tgbotapi.NewKeyboardButton("🏷️ Установить категорию"),
@@ -79,14 +99,14 @@ func main() {
 		}
 
 		chatID := upd.Message.Chat.ID
-		text := strings.TrimSpace(strings.ToLower(upd.Message.Text))
+		text := strings.TrimSpace(upd.Message.Text)
 
-		switch text {
+		switch strings.ToLower(text) {
 		case "/start", "привет":
 			msg := tgbotapi.NewMessage(chatID,
 				"👋 Привет! Напиши «что когда», например:\n"+
-					"  • «10 мая в 14:00 сходить в аптеку»\n"+
-					"  • или «через 5 мин пойти гулять»")
+					" • «через 5 мин кофеить»\n"+
+					" • «10 мая в 14:00 сходить в аптеку»")
 			msg.ReplyMarkup = menu
 			bot.Send(msg)
 
@@ -96,11 +116,11 @@ func main() {
 		case "📋 список":
 			showList(bot, chatID)
 
-		case "🔁 повтор включён":
+		case "🔁 повтор вкл":
 			repeatFlag[chatID] = true
 			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор включён"))
 
-		case "🔁 повтор выключен":
+		case "🔁 повтор выкл":
 			repeatFlag[chatID] = false
 			bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор выключен"))
 
@@ -110,30 +130,27 @@ func main() {
 
 		case "/help":
 			bot.Send(tgbotapi.NewMessage(chatID,
-				"📚 Подсказки:\n"+
-					"  • Просто напиши «что когда»\n"+
-					"  • 📝 Напомни мне — диалог\n"+
-					"  • 📋 Список — активные напоминания\n"+
-					"  • 🔁 Повтор — вкл/выкл\n"+
-					"  • 🏷️ Категория — задать свою"))
+				"📚 Инструкция:\n"+
+					" • Просто напиши «что когда» в одном сообщении\n"+
+					" • 📝 Напомни мне — начать диалог\n"+
+					" • 📋 Список — показать напоминания\n"+
+					" • 🔁 Повтор вкл/выкл — включить/выключить повтор\n"+
+					" • 🏷️ Категория — задать свою"))
 		default:
 			// установка категории
 			if userCats[chatID] == "pending" {
-				userCats[chatID] = upd.Message.Text
-				bot.Send(tgbotapi.NewMessage(chatID,
-					"✅ Категория: "+upd.Message.Text))
+				userCats[chatID] = text
+				bot.Send(tgbotapi.NewMessage(chatID, "✅ Категория: "+text))
 				continue
 			}
-			// абсолютный парсинг даты/времени
-			if at, err := dateparse.ParseLocal(upd.Message.Text); err == nil && at.After(time.Now()) {
-				// отделяем текст от цифр — грубо
-				note := re.ReplaceAllString(upd.Message.Text, "")
-				schedule(bot, chatID, time.Until(at), strings.TrimSpace(note))
+			// полный парсинг одного сообщения
+			if at, note, ok := parseInput(text); ok {
+				schedule(bot, chatID, time.Until(at), note)
 				continue
 			}
-			// диалог: ждём время
+			// ждём время от предыдущего шага
 			if note, ok := pendingNote[chatID]; ok {
-				if m := re.FindStringSubmatch(text); len(m) == 3 {
+				if m := reRel.FindStringSubmatch(text); len(m) == 3 {
 					if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
 						delete(pendingNote, chatID)
 						schedule(bot, chatID, d, note)
@@ -145,22 +162,62 @@ func main() {
 				continue
 			}
 			// начинаем диалог
-			pendingNote[chatID] = upd.Message.Text
-			bot.Send(tgbotapi.NewMessage(chatID,
-				"⏳ Через сколько напомнить?"))
+			pendingNote[chatID] = text
+			bot.Send(tgbotapi.NewMessage(chatID, "⏳ Через сколько напомнить?"))
 		}
 	}
+}
+
+// пробуем парсить сразу «абсолютные» / «завтра» / «через»
+func parseInput(text string) (time.Time, string, bool) {
+	now := time.Now()
+
+	// 1) абсолютная дата
+	if m := reAbs.FindStringSubmatch(text); len(m) == 6 {
+		day := toInt(m[1])
+		mon := monthMap[strings.ToLower(m[2])]
+		hour := toInt(m[3])
+		min := toInt(m[4])
+		note := m[5]
+		at := time.Date(now.Year(), mon, day, hour, min, 0, 0, now.Location())
+		if at.Before(now) {
+			at = at.AddDate(1, 0, 0)
+		}
+		return at, note, true
+	}
+	// 2) завтра
+	if m := reTomorrow.FindStringSubmatch(text); len(m) == 4 {
+		h := 9
+		min := 0
+		if m[1] != "" {
+			h = toInt(m[1])
+			if m[2] != "" {
+				min = toInt(m[2])
+			}
+		}
+		note := m[3]
+		at := time.Date(now.Year(), now.Month(), now.Day()+1, h, min, 0, 0, now.Location())
+		return at, note, true
+	}
+	// 3) через
+	if m := reRel.FindStringSubmatch(text); len(m) == 3 {
+		if d, err := time.ParseDuration(m[1] + unitSuffix(m[2])); err == nil {
+			// вырезаем «через X» из текста
+			note := reRel.ReplaceAllString(text, "")
+			return now.Add(d), strings.TrimSpace(note), true
+		}
+	}
+	return time.Time{}, "", false
 }
 
 func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) {
 	at := time.Now().Add(d)
 	id := fmt.Sprintf("%d_%d", chatID, at.UnixNano())
-
-	category := classify(note)
-	if cat, ok := userCats[chatID]; ok && cat != "pending" {
-		category = cat
+	cat := classify(note)
+	if c := userCats[chatID]; c != "" {
+		cat = c
 	}
-	repeat := repeatFlag[chatID]
+	rep := repeatFlag[chatID]
 
 	mu.Lock()
 	reminders = append(reminders, Reminder{
@@ -168,14 +225,14 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 		ChatID:     chatID,
 		Note:       note,
 		At:         at,
-		Category:   category,
-		NeedRepeat: repeat,
+		Category:   cat,
+		NeedRepeat: rep,
 	})
 	mu.Unlock()
 
 	timer := time.AfterFunc(d, func() {
 		msg := tgbotapi.NewMessage(chatID, "🔔 "+note)
-		if repeat {
+		if rep {
 			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
 				tgbotapi.NewInlineKeyboardRow(
 					tgbotapi.NewInlineKeyboardButtonData("✅ Выполнено", "done_"+id),
@@ -183,8 +240,8 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 			)
 		}
 		bot.Send(msg)
-
-		if repeat {
+		if rep {
+			// повтор через минуту
 			timers[id] = time.AfterFunc(1*time.Minute, func() {
 				if stillExists(id) {
 					bot.Send(tgbotapi.NewMessage(chatID, "🔁 Повтор: "+note))
@@ -195,32 +252,31 @@ func schedule(bot *tgbotapi.BotAPI, chatID int64, d time.Duration, note string) 
 	timers[id] = timer
 
 	bot.Send(tgbotapi.NewMessage(chatID,
-		fmt.Sprintf("✅ Запомню через %s (Категория: %s)", d.String(), category)))
+		fmt.Sprintf("✅ Запомню через %s (Категория: %s)", d.String(), cat)))
 }
 
 func showList(bot *tgbotapi.BotAPI, chatID int64) {
 	mu.Lock()
 	defer mu.Unlock()
-
-	grouped := map[string][]Reminder{}
+	g := map[string][]Reminder{}
 	for _, r := range reminders {
 		if r.ChatID == chatID {
-			grouped[r.Category] = append(grouped[r.Category], r)
+			g[r.Category] = append(g[r.Category], r)
 		}
 	}
-	if len(grouped) == 0 {
+	if len(g) == 0 {
 		bot.Send(tgbotapi.NewMessage(chatID, "📋 Нет напоминаний"))
 		return
 	}
 
 	var rows [][]tgbotapi.InlineKeyboardButton
 	var sb strings.Builder
-	sb.WriteString("📋 *Список*: \n\n")
-	for cat, items := range grouped {
+	sb.WriteString("📋 *Список*:\n\n")
+	for cat, items := range g {
 		sb.WriteString(fmt.Sprintf("🔖 *%s*:\n", cat))
 		for _, r := range items {
-			sb.WriteString(fmt.Sprintf("• %s (через %s)\n",
-				r.Note, time.Until(r.At).Truncate(time.Second)))
+			rem := time.Until(r.At).Truncate(time.Second)
+			sb.WriteString(fmt.Sprintf("• %s (через %s)\n", r.Note, rem))
 			rows = append(rows, tgbotapi.NewInlineKeyboardRow(
 				tgbotapi.NewInlineKeyboardButtonData("❌ Удалить", r.ID),
 			))
@@ -283,28 +339,17 @@ func stillExists(id string) bool {
 }
 
 func classify(text string) string {
+	l := strings.ToLower(text)
 	switch {
-	case containsRoot(text, "код", "проект", "дедлайн"):
+	case strings.Contains(l, "код"), strings.Contains(l, "проект"), strings.Contains(l, "дедлайн"):
 		return "Работа"
-	case containsRoot(text, "лекц", "экзам", "школ"):
+	case strings.Contains(l, "лекц"), strings.Contains(l, "экзам"), strings.Contains(l, "школ"):
 		return "Учёба"
-	case containsRoot(text, "врач", "здоров", "лекарств"):
+	case strings.Contains(l, "врач"), strings.Contains(l, "здоров"), strings.Contains(l, "лекарств"):
 		return "Здоровье"
 	default:
 		return "Другое"
 	}
-}
-
-func containsRoot(text string, roots ...string) bool {
-	words := wordRe.FindAllString(strings.ToLower(text), -1)
-	for _, w := range words {
-		for _, root := range roots {
-			if strings.HasPrefix(w, root) || strings.HasPrefix(root, w) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func unitSuffix(u string) string {
@@ -316,7 +361,11 @@ func unitSuffix(u string) string {
 		return "m"
 	case strings.HasPrefix(u, "ч"):
 		return "h"
-	default:
-		return ""
 	}
+	return ""
+}
+
+func toInt(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
